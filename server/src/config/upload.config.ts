@@ -1,16 +1,32 @@
-// config/upload.config.ts
 import path from 'path';
-import fs from 'fs';
+import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
 
-// Create uploads directory if it doesn't exist
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
+// Define upload directory at root level
+const UPLOAD_DIR = path.join(process.cwd(), '..', 'uploads');
 
-export const uploadConfig = {
-  UPLOAD_DIR,
-  ALLOWED_MIME_TYPES: ['image/jpeg', 'image/png', 'application/pdf'],
-  MAX_FILE_SIZE: 5 * 1024 * 1024, // 5MB
-  getDocumentPath: (filename: string) => path.join(UPLOAD_DIR, filename)
-};
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOAD_DIR); // Use the root uploads directory
+  },
+  filename: (req, file, cb) => {
+    const uniqueId = uuidv4();
+    const ext = path.extname(file.originalname);
+    cb(null, `${uniqueId}${ext}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+    if (!allowedTypes.includes(file.mimetype)) {
+      cb(new Error('Invalid file type'));
+      return;
+    }
+    cb(null, true);
+  }
+});
+
+export { upload, UPLOAD_DIR };

@@ -1,7 +1,8 @@
 // routes/kyc.routes.ts
 import { Router } from 'express';
-import { authenticateToken } from '../middleware/auth.middleware';
-import { handleUpload } from '../middleware/upload.middleware';
+import { authenticateToken, isAdmin } from '../middleware/auth.middleware';
+import { upload } from '../config/upload.config';
+
 import {
   submitKYC,
   getKYCStatus,
@@ -14,13 +15,13 @@ import {
 const router = Router();
 
 // User routes
-router.post('/submit', authenticateToken, handleUpload, submitKYC);
+router.post('/submit', authenticateToken, upload.single('document'), submitKYC);
 router.get('/status', authenticateToken, getKYCStatus);
 router.get('/document/:id', authenticateToken, getDocument);
 
 // Admin routes
-router.get('/all', authenticateToken, getAllKYCs);
-router.put('/:id/status', authenticateToken, updateKYCStatus);
-router.get('/statistics', authenticateToken, getKYCStatistics);
+router.get('/all', authenticateToken, isAdmin, getAllKYCs);
+router.put('/:id/status', authenticateToken, isAdmin, updateKYCStatus);
+router.get('/statistics', authenticateToken, isAdmin, getKYCStatistics);
 
 export default router;

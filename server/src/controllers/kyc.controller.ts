@@ -1,12 +1,14 @@
-// controllers/kyc.controller.ts
 import { Response, RequestHandler } from 'express';
 import prisma from '../config/prisma';
 import { AuthRequest } from '../types';
 import { uploadConfig } from '../config/upload.config';
 import fs from 'fs/promises';
 import path from 'path';
+const getFullDocumentUrl = (req: AuthRequest, documentId: number) => {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  return `${baseUrl}/api/kyc/document/${documentId}`;
+};
 
-// Submit KYC
 export const submitKYC: RequestHandler = async (req: AuthRequest, res: Response): Promise<void> => {
   const file = req.file;
   try {
@@ -30,16 +32,6 @@ export const submitKYC: RequestHandler = async (req: AuthRequest, res: Response)
       return;
     }
 
-    const existingKYC = await prisma.kYC.findUnique({
-      where: { userId }
-    });
-
-    if (existingKYC) {
-      await fs.unlink(file.path).catch(console.error);
-      res.status(400).json({ message: 'KYC already submitted' });
-      return;
-    }
-
     const kyc = await prisma.kYC.create({
       data: {
         fullName: fullName.trim(),
@@ -56,21 +48,19 @@ export const submitKYC: RequestHandler = async (req: AuthRequest, res: Response)
       }
     });
 
-    res.status(201).json({ 
-      message: 'KYC submitted successfully', 
+    res.status(201).json({
+      message: 'KYC submitted successfully',
       kyc: {
         ...kyc,
-        documentUrl: `/api/kyc/document/${kyc.id}`
+        documentUrl: getFullDocumentUrl(req, kyc.id)
       }
     });
   } catch (error) {
-    console.error('KYC submission error:', error);
     if (file) await fs.unlink(file.path).catch(console.error);
+    console.error('KYC submission error:', error);
     res.status(500).json({ message: 'Error submitting KYC' });
   }
 };
-
-// Get KYC Status
 export const getKYCStatus: RequestHandler = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user?.id) {
@@ -88,19 +78,19 @@ export const getKYCStatus: RequestHandler = async (req: AuthRequest, res: Respon
       }
     });
 
-    // Instead of returning 404, return null for KYC if it doesn't exist
-    return res.json({ kyc: kyc ? {
+    // Transform response with full URL
+    const transformedKyc = kyc ? {
       ...kyc,
-      documentUrl: kyc.id ? `/api/kyc/document/${kyc.id}` : null
-    } : null });
+      documentUrl: getFullDocumentUrl(req, kyc.id)
+    } : null;
 
+    return res.json({ kyc: transformedKyc });
   } catch (error) {
     console.error('Error fetching KYC status:', error);
     res.status(500).json({ message: 'Error fetching KYC status' });
   }
 };
 
-// Get all KYCs (Admin)
 export const getAllKYCs: RequestHandler = async (req: AuthRequest, res: Response) => {
   try {
     const kycs = await prisma.kYC.findMany({
@@ -118,31 +108,23 @@ export const getAllKYCs: RequestHandler = async (req: AuthRequest, res: Response
       }
     });
 
-    const formattedKycs = kycs.map(kyc => ({
+    // Transform all KYCs with full URLs
+    const transformedKycs = kycs.map(kyc => ({
       ...kyc,
-      documentUrl: `/api/kyc/document/${kyc.id}`
+      documentUrl: getFullDocumentUrl(req, kyc.id)
     }));
 
-    res.json({ kycs: formattedKycs });
+    res.json({ kycs: transformedKycs });
   } catch (error) {
     console.error('Error fetching KYCs:', error);
     res.status(500).json({ message: 'Error fetching KYCs' });
   }
 };
 
-// Update KYC Status
 export const updateKYCStatus: RequestHandler = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const { status, adminNotes } = req.body;
-
-    if (!['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
-      return res.status(400).json({ message: 'Invalid status' });
-    }
-
-    if (status === 'REJECTED' && !adminNotes?.trim()) {
-      return res.status(400).json({ message: 'Admin notes required for rejection' });
-    }
 
     const updatedKYC = await prisma.kYC.update({
       where: { id: parseInt(id) },
@@ -160,11 +142,11 @@ export const updateKYCStatus: RequestHandler = async (req: AuthRequest, res: Res
       }
     });
 
-    res.json({ 
+    res.json({
       message: `KYC ${status.toLowerCase()} successfully`,
       kyc: {
         ...updatedKYC,
-        documentUrl: `/api/kyc/document/${updatedKYC.id}`
+        documentUrl: getFullDocumentUrl(req, updatedKYC.id)
       }
     });
   } catch (error) {
@@ -226,14 +208,12 @@ export const getKYCStatistics: RequestHandler = async (req: AuthRequest, res: Re
     res.status(500).json({ message: 'Error fetching statistics' });
   }
 };
-
-// Get Document
-// kyc.controller.ts
 export const getDocument: RequestHandler = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.id;
+    console.log('Requested document ID:', id);
 
+    const userId = req.user?.id;
     if (!userId) {
       return res.status(401).json({ message: 'Not authenticated' });
     }
@@ -249,31 +229,40 @@ export const getDocument: RequestHandler = async (req: AuthRequest, res: Respons
       }
     });
 
-    if (!kyc) {
-      return res.status(404).json({ message: 'KYC not found' });
+    console.log('Found KYC record:', kyc);
+
+    if (!kyc || !kyc.documentUrl) {
+      return res.status(404).json({ message: 'Document not found' });
     }
 
-    if (kyc.userId !== userId && req.user.role !== 'ADMIN') {
+    // Check authorization
+    if (kyc.userId !== userId && req.user?.role !== 'ADMIN') {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    const filePath = path.join(__dirname, '..', 'uploads', kyc.documentUrl);
+    // Updated path resolution
+    const filePath = path.join(process.cwd(), '../uploads', kyc.documentUrl);
+    console.log('Attempting to access file at:', filePath);
 
+    // Check if file exists
     try {
       await fs.access(filePath);
-    } catch {
+    } catch (error) {
+      console.error('File access error:', error);
       return res.status(404).json({ message: 'Document file not found' });
     }
 
+    // Set content type
     const ext = path.extname(kyc.documentUrl).toLowerCase();
     const contentType = ext === '.pdf' ? 'application/pdf' : 
                        ext === '.png' ? 'image/png' : 'image/jpeg';
-    
+
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `inline; filename=${kyc.documentUrl}`);
+    res.setHeader('Content-Disposition', `inline; filename=${path.basename(kyc.documentUrl)}`);
     res.sendFile(filePath);
+
   } catch (error) {
-    console.error('Error fetching document:', error);
+    console.error('Error in getDocument:', error);
     res.status(500).json({ message: 'Error fetching document' });
   }
 };
